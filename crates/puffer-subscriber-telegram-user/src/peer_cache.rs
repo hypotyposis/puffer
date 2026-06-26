@@ -299,6 +299,15 @@ pub(crate) async fn hydrate_chat_avatars_deferred(
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecentDialogPeerCacheHydration {
+    pub direct_users_seen: usize,
+    pub dialogs_seen: usize,
+    pub target_direct_users: usize,
+    pub max_dialogs: usize,
+    pub dialogs_exhausted: bool,
+}
+
 /// Hydrates the peer cache from Telegram's contact book response.
 pub(crate) async fn hydrate_contact_book(
     client: &Client,
@@ -346,18 +355,22 @@ pub async fn hydrate_recent_dialog_peer_cache(
     client: &Client,
     target_direct_users: usize,
     max_dialogs: usize,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<RecentDialogPeerCacheHydration> {
     let original = TelegramPeerCache::load(env).unwrap_or_default();
     let mut cache = original.clone();
     let target_direct_users = target_direct_users.max(1);
     let max_dialogs = max_dialogs.max(target_direct_users);
     let mut dialogs_seen = 0usize;
     let mut direct_users_seen = 0usize;
+    let mut dialogs_exhausted = false;
     let mut iter = client.iter_dialogs();
     while dialogs_seen < max_dialogs && direct_users_seen < target_direct_users {
         let dialog = match iter.next().await {
             Ok(Some(dialog)) => dialog,
-            Ok(None) => break,
+            Ok(None) => {
+                dialogs_exhausted = true;
+                break;
+            }
             Err(error) => {
                 warn!(
                     error = %error,
@@ -392,9 +405,16 @@ pub async fn hydrate_recent_dialog_peer_cache(
         direct_users_seen,
         target_direct_users,
         max_dialogs,
+        dialogs_exhausted,
         "hydrated Telegram recent dialog peer cache"
     );
-    Ok(direct_users_seen)
+    Ok(RecentDialogPeerCacheHydration {
+        direct_users_seen,
+        dialogs_seen,
+        target_direct_users,
+        max_dialogs,
+        dialogs_exhausted,
+    })
 }
 
 /// Resolves saved `telegram@username` contact ids into cached Telegram peers.
